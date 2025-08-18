@@ -18,8 +18,19 @@ def gaussian_peak(t, t_peak, sigma, amplitude):
 
 def dose_profile(hours_from_start, dose_mg, t0_hours, fed):
     # split 50/50 (toy)
-    ir_mg = 0.5 * dose_mg
-    er_mg = 0.5 * dose_mg
+    # Support IR only dosing
+    if isinstance(dose_mg, dict):
+        mg = dose_mg["mg"]
+        ir_only = dose_mg.get("type", "IR+ER") == "IR only"
+    else:
+        mg = dose_mg
+        ir_only = False
+    if ir_only:
+        ir_mg = mg
+        er_mg = 0.0
+    else:
+        ir_mg = 0.5 * mg
+        er_mg = 0.5 * mg
     # tmax
     ir_tmax, er_tmax = (1.5, 4.5) if fed else (1.0, 3.0)
     # widths
@@ -42,10 +53,14 @@ def simulate_total(t_axis, doses, start_hour):
     parts = []
     for d in doses:
         t0 = parse_time_to_hours(d["time_str"], start_hour)
-        ir, er, tot = dose_profile(t_axis, d["mg"], t0, d["fed"])
+        ir, er, tot = dose_profile(t_axis, d, t0, d["fed"])
         total += tot
-        parts.append((f"IR {d['mg']}mg @ {d['time_str']}" + (" (fed)" if d["fed"] else " (fasted)"), ir))
-        parts.append((f"ER {d['mg']}mg @ {d['time_str']}" + (" (fed)" if d["fed"] else " (fasted)"), er))
+        label_type = d.get("type", "IR+ER")
+        if label_type == "IR only":
+            parts.append((f"IR {d['mg']}mg @ {d['time_str']} (IR only)" + (" (fed)" if d["fed"] else " (fasted)"), ir))
+        else:
+            parts.append((f"IR {d['mg']}mg @ {d['time_str']}" + (" (fed)" if d["fed"] else " (fasted)"), ir))
+            parts.append((f"ER {d['mg']}mg @ {d['time_str']}" + (" (fed)" if d["fed"] else " (fasted)"), er))
     return total, parts
 
 
@@ -114,13 +129,19 @@ def simulator_ui():
     if "sim_doses" not in st.session_state:
         st.session_state.sim_doses = []
     with st.expander("Add dose"):
-        c1,c2,c3,c4 = st.columns(4)
+        c1,c2,c3,c4,c5 = st.columns(5)
         with c1: h = st.number_input("Hour", 0, 23, 8, key="sim_h")
         with c2: m = st.number_input("Min", 0, 59, 0, step=5, key="sim_m")
         with c3: mg = st.selectbox("Dose", [10,20,30], index=1, key="sim_mg")
         with c4: fed = st.selectbox("With food?", ["Fasted","Fed"], index=0, key="sim_fed")
+        with c5: ir_type = st.selectbox("Type", ["IR+ER","IR only"], index=0, key="sim_type")
         if st.button("➕ Add dose", key="sim_add"):
-            st.session_state.sim_doses.append({"time_str": f"{int(h):02d}:{int(m):02d}", "mg": int(mg), "fed": fed=="Fed"})
+            st.session_state.sim_doses.append({
+                "time_str": f"{int(h):02d}:{int(m):02d}",
+                "mg": int(mg),
+                "fed": fed=="Fed",
+                "type": ir_type
+            })
     # Show and manage current doses
     if st.session_state.sim_doses:
         st.write("Current doses:")
