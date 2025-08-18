@@ -94,7 +94,7 @@ def safe_trapz(y, x):
 
 # ===== Shared controls =====
 with st.sidebar:
-    mode = st.selectbox("Mode", ["Simulator", "Optimizer"], index=1)
+    mode = st.selectbox("Mode", ["Simulator", "Optimizer"], index=0)
     start_hour = st.number_input("Plot start hour", 0, 23, 8)
     duration_h = st.slider("Duration (hours)", 6, 24, 12)
     chart_height = st.slider("Chart height (px)", 120, 600, 240, 10,
