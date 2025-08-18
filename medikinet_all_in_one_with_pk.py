@@ -7,9 +7,9 @@ import streamlit as st
 MAX_DOSES = 3
 
 # ===== App config =====
-st.set_page_config(page_title="Medikinet CR – All‑in‑One", layout="wide")
-st.title("Medikinet CR – All‑in‑One")
-st.caption("Improved PK model based on clinical methylphenidate data. For educational purposes only — not medical advice.")
+st.set_page_config(page_title="Medikinet CR – Advanced PK Models", layout="wide")
+st.title("Medikinet CR – Advanced Pharmacokinetic Models")
+st.caption("Multiple PK models with increasing complexity. For educational purposes only — not medical advice.")
 
 # ===== Core model =====
 def gaussian_peak(t, t_peak, sigma, amplitude):
@@ -17,7 +17,6 @@ def gaussian_peak(t, t_peak, sigma, amplitude):
 
 def dose_profile(hours_from_start, dose_mg, t0_hours, fed):
     # split 50/50 (Medikinet CR formulation)
-    # Support IR only dosing
     if isinstance(dose_mg, dict):
         mg = dose_mg["mg"]
         ir_only = dose_mg.get("type", "IR+ER") == "IR only"
@@ -32,7 +31,6 @@ def dose_profile(hours_from_start, dose_mg, t0_hours, fed):
         er_mg = 0.5 * mg
     
     # Updated tmax based on Medikinet CR literature
-    # Fed state delays absorption more significantly
     ir_tmax, er_tmax = (2.0, 5.0) if fed else (1.25, 3.5)
     
     # Adjusted widths for more realistic profiles
@@ -52,22 +50,22 @@ def dose_profile(hours_from_start, dose_mg, t0_hours, fed):
 
 
 def _bateman(t, t0, ka, ke, amp):
-    import numpy as _np
+    """One-compartment model with first-order absorption and elimination."""
     dt = t - t0
-    y = _np.zeros_like(t)
+    y = np.zeros_like(t)
     mask = dt > 0
-    if not _np.any(mask):
+    if not np.any(mask):
         return y
     dtm = dt[mask]
     
     # Handle case where ka ≈ ke (use L'Hôpital's rule approximation)
     if abs(ka - ke) < 0.01:
         # When ka ≈ ke, use the limiting form
-        y_val = amp * ka * dtm * _np.exp(-ke * dtm)
+        y_val = amp * ka * dtm * np.exp(-ke * dtm)
     else:
         denom = ka - ke
         # Standard Bateman equation
-        y_val = amp * (ka / denom) * (_np.exp(-ke * dtm) - _np.exp(-ka * dtm))
+        y_val = amp * (ka / denom) * (np.exp(-ke * dtm) - np.exp(-ka * dtm))
     
     y[mask] = y_val
     return y
@@ -97,8 +95,7 @@ PK_CFG_DEFAULT = {
 }
 
 def pk_dose_profile(hours_from_start, dose_entry, t0_hours, fed, cfg=None):
-    """Two-input PK model: IR Bateman + lagged ER Bateman with shared ke.
-    Updated to better reflect Medikinet CR pharmacokinetics."""
+    """Two-input PK model: IR Bateman + lagged ER Bateman with shared ke."""
     if cfg is None:
         cfg = PK_CFG_DEFAULT
     
@@ -142,65 +139,60 @@ def pk_dose_profile(hours_from_start, dose_entry, t0_hours, fed, cfg=None):
 
 def parse_time_to_hours(t_str, start_hour):
     hh, mm = map(int, t_str.split(":"))
-    # Relative hours from plot start; allow negative values (earlier than start)
     rel = (hh + mm/60) - start_hour
     return rel
 
 def simulate_total(t_axis, doses, start_hour):
     total = np.zeros_like(t_axis)
     parts = []
+    
+    # Get model engine
+    model = st.session_state.get("model_engine", "pk")
+    
     for d in doses:
         t0 = parse_time_to_hours(d["time_str"], start_hour)
-        if st.session_state.get("model_engine", "pk") == "pk":
+        
+        if model == "pk":
             ir, er, tot = pk_dose_profile(t_axis, d, t0, d["fed"])
-        else:
+        else:  # gaussian
             ir, er, tot = dose_profile(t_axis, d, t0, d["fed"])
+        
         total += tot
         label_type = d.get("type", "IR+ER")
+        
         if label_type == "IR only":
             parts.append((f"IR {d['mg']}mg @ {d['time_str']} (IR only)" + (" (fed)" if d["fed"] else " (fasted)"), ir))
         else:
             parts.append((f"IR {d['mg']/2:.0f}mg @ {d['time_str']}" + (" (fed)" if d["fed"] else " (fasted)"), ir))
             parts.append((f"ER {d['mg']/2:.0f}mg @ {d['time_str']}" + (" (fed)" if d["fed"] else " (fasted)"), er))
+    
     return total, parts
 
-
 def compute_t_end(total_curve, t_axis, start_hour):
-    """Return latest t (hours-from-start) to plot.
-    Stop at 23:00 or when curve ~0 (1% of peak), whichever is earlier.
-    """
-    import numpy as _np
-    if total_curve is None or _np.allclose(total_curve, 0):
-        return 0.0
-    peak = float(_np.max(total_curve))
+    """Return latest t (hours-from-start) to plot."""
+    if total_curve is None or np.allclose(total_curve, 0):
+        return duration_h
+    peak = float(np.max(total_curve))
     if peak <= 1e-12:
-        return 0.0
+        return duration_h
     eps = 0.01 * peak
-    idx = _np.where(total_curve > eps)[0]
+    idx = np.where(total_curve > eps)[0]
     if idx.size == 0:
-        return 0.0
-    # small margin to show the tail
+        return duration_h
     last_t = float(t_axis[int(idx[-1])]) + 0.25
-    # cap by 23:00
     return min(last_t, 23.0 - start_hour)
 
 def compute_t_min(doses, start_hour):
-    """Return earliest time (possibly negative) to include on the t-axis
-    so that we see peaks from doses taken before start_hour.
-    """
+    """Return earliest time to include on the t-axis."""
     t_min = 0.0
     for d in doses or []:
-        # relative time of taking the dose
         hh, mm = map(int, d["time_str"].split(":"))
-        t0 = (hh + mm/60) - start_hour  # can be negative
-        # Updated tmax for improved model
+        t0 = (hh + mm/60) - start_hour
         ir_tmax, er_tmax = (2.0, 5.0) if d.get("fed", False) else (1.25, 3.5)
         ir_sigma, er_sigma = 0.6, 1.5
-        # earliest relevant times ~ (center - 3*sigma)
         cand_ir = t0 + ir_tmax - 3*ir_sigma
         cand_er = t0 + er_tmax - 3*er_sigma
         t_min = min(t_min, cand_ir, cand_er)
-    # clamp to a sensible floor to avoid huge canvases
     return max(t_min, -12.0)
 
 def safe_trapz(y, x):
@@ -210,269 +202,298 @@ def safe_trapz(y, x):
 
 # ===== Shared controls =====
 with st.sidebar:
+    st.markdown("### Settings")
     mode = st.selectbox("Mode", ["Simulator", "Optimizer"], index=0)
     start_hour = st.number_input("Plot start hour", 0, 23, 8)
-    duration_h = st.slider("Duration (hours)", 6, 24, 12)
-    chart_height = st.slider("Chart height (px)", 120, 600, 240, 10,
-                             help="Adjust plot height to fit your screen.")
-    use_container = st.checkbox("Use container width (full)", False,
-                             help="If on, chart spans the full content width and keeps aspect ratio. Turn OFF to control exact width.")
-    chart_width = st.slider("Chart width (px)", 400, 1200, 700, 10,
-                             help="Only used when full-width is OFF.")
-    compact = st.checkbox("Compact chart mode", True,
-                          help="Tighter margins and smaller legend labels.")
+    duration_h = st.slider("Duration (hours)", 6, 24, 16)
+    chart_height = st.slider("Chart height (px)", 200, 600, 400, 10)
+    use_container = st.checkbox("Use full width", True)
+    if not use_container:
+        chart_width = st.slider("Chart width (px)", 400, 1200, 800, 10)
+    else:
+        chart_width = 800
+    compact = st.checkbox("Compact chart mode", False)
 
     st.markdown("---")
-    _model_choice = st.radio("Model engine", ["PK (Bateman, improved)", "Gaussian (simplified)"], index=0,
-                             help="The PK model uses more realistic pharmacokinetic parameters based on methylphenidate literature.")
-    if _model_choice.startswith("Gaussian"):
-        st.session_state["model_engine"] = "gaussian"
-    else:
-        st.session_state["model_engine"] = "pk"
+    st.markdown("### Model Selection")
+    _model_choice = st.radio(
+        "Pharmacokinetic Model", 
+        ["1-Compartment PK (Improved)", "Gaussian (Simplified)"], 
+        index=0,
+        help="Choose model complexity."
+    )
     
-    # Show PK parameters info
-    if st.session_state.get("model_engine") == "pk":
-        with st.expander("PK Model Parameters"):
+    if _model_choice.startswith("1-Comp"):
+        st.session_state["model_engine"] = "pk"
+    else:
+        st.session_state["model_engine"] = "gaussian"
+    
+    # Show model info
+    with st.expander("Model Details"):
+        if st.session_state["model_engine"] == "pk":
             st.markdown("""
-            **Updated parameters based on clinical data:**
-            - **t½**: 2.0 hours (ke = 0.347 h⁻¹)
-            - **IR peak (fasted)**: ~1.25 hours
-            - **IR peak (fed)**: ~2.0 hours  
-            - **ER peak (fasted)**: ~3.5 hours
-            - **ER peak (fed)**: ~5.0 hours
-            - **Food effect**: Delays absorption, slight ↑ bioavailability
+            **1-Compartment Model Features:**
+            - Bateman function (first-order absorption/elimination)
+            - t½ = 2.0 hours (more accurate for methylphenidate)
+            - Realistic food effects (delays & bioavailability)
+            - Separate IR/ER lag times
+            
+            **Parameters:**
+            - ke: 0.347 h⁻¹ (elimination)
+            - ka_IR: 2.5 h⁻¹ (fasted), 1.5 h⁻¹ (fed)
+            - ka_ER: 0.6 h⁻¹ (fasted), 0.4 h⁻¹ (fed)
             """)
-
-t = np.linspace(0, duration_h, int(duration_h * 60))  # minute grid
+        else:
+            st.markdown("""
+            **Gaussian Model:**
+            - Simple peak approximation
+            - Fast computation
+            - Less physiologically accurate
+            - Good for rough estimates
+            """)
 
 # ===== Simulator =====
 def simulator_ui():
-    st.subheader("Simulator")
+    st.subheader("📊 Concentration Simulator")
+    
+    # Initialize doses
     if "sim_doses" not in st.session_state:
         st.session_state.sim_doses = []
-    with st.expander("Add dose"):
-        c1,c2,c3,c4,c5 = st.columns(5)
-        with c1: h = st.number_input("Hour", 0, 23, 8, key="sim_h")
-        with c2: m = st.number_input("Min", 0, 59, 0, step=5, key="sim_m")
-        with c3: mg = st.selectbox("Dose", [10,20,30,40], index=1, key="sim_mg")
-        with c4: fed = st.selectbox("With food?", ["Fasted","Fed"], index=0, key="sim_fed")
-        with c5: ir_type = st.selectbox("Type", ["IR+ER","IR only"], index=0, key="sim_type")
-        if st.button("➕ Add dose", key="sim_add"):
+    
+    # Quick presets
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("Standard (20-10-10)", use_container_width=True):
+            st.session_state.sim_doses = [
+                {"time_str": "08:00", "mg": 20, "fed": True, "type": "IR+ER"},
+                {"time_str": "12:00", "mg": 10, "fed": True, "type": "IR+ER"},
+                {"time_str": "16:00", "mg": 10, "fed": False, "type": "IR+ER"}
+            ]
+            st.rerun()
+    with col2:
+        if st.button("Extended (20-20)", use_container_width=True):
+            st.session_state.sim_doses = [
+                {"time_str": "07:00", "mg": 20, "fed": True, "type": "IR+ER"},
+                {"time_str": "13:00", "mg": 20, "fed": True, "type": "IR+ER"}
+            ]
+            st.rerun()
+    with col3:
+        if st.button("Clear All", use_container_width=True):
+            st.session_state.sim_doses = []
+            st.rerun()
+    
+    # Add dose form
+    with st.expander("➕ Add New Dose", expanded=len(st.session_state.sim_doses) == 0):
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1: 
+            h = st.number_input("Hour", 0, 23, 8, key="sim_h")
+        with c2: 
+            m = st.number_input("Min", 0, 59, 0, step=15, key="sim_m")
+        with c3: 
+            mg = st.selectbox("Dose (mg)", [5, 10, 15, 20, 30, 40], index=3, key="sim_mg")
+        with c4: 
+            fed = st.selectbox("With food?", ["Fasted", "Fed"], index=1, key="sim_fed")
+        with c5: 
+            ir_type = st.selectbox("Type", ["IR+ER", "IR only"], index=0, key="sim_type")
+        
+        if st.button("Add Dose", type="primary", use_container_width=True):
             st.session_state.sim_doses.append({
                 "time_str": f"{int(h):02d}:{int(m):02d}",
                 "mg": int(mg),
-                "fed": fed=="Fed",
+                "fed": fed == "Fed",
                 "type": ir_type
             })
-    # Show and manage current doses
+            st.rerun()
+    
+    # Display current doses
     if st.session_state.sim_doses:
-        st.write("Current doses:")
-        for i, d in enumerate(list(st.session_state.sim_doses)):
-            c1, c2, c3, c4, c5 = st.columns([2,2,2,1,1])
-            c1.write(f"Time: **{d['time_str']}**")
-            c2.write(f"Dose: **{d['mg']} mg**")
-            c3.write("With food: **" + ("Yes" if d['fed'] else "No") + "**")
-            c4.write(f"Type: **{d.get('type', 'IR+ER')}**")
-            if c5.button("🗑 Remove", key=f"sim_rm_{i}"):
-                st.session_state.sim_doses.pop(i)
-                try:
+        st.markdown("### Current Schedule")
+        for i, d in enumerate(st.session_state.sim_doses):
+            col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1])
+            with col1:
+                st.write(f"**{d['time_str']}**")
+            with col2:
+                st.write(f"**{d['mg']} mg**")
+            with col3:
+                st.write(f"**{'Fed' if d['fed'] else 'Fasted'}**")
+            with col4:
+                st.write(f"**{d.get('type', 'IR+ER')}**")
+            with col5:
+                if st.button("🗑️", key=f"rm_{i}"):
+                    st.session_state.sim_doses.pop(i)
                     st.rerun()
-                except Exception:
-                    st.experimental_rerun()
-        # dynamic time axis to include pre-start doses
+        
+        # Calculate metrics
+        total_daily = sum(d['mg'] for d in st.session_state.sim_doses)
+        
+        # Calculate concentration curve
         t_min = compute_t_min(st.session_state.sim_doses, start_hour)
-        t = np.linspace(t_min, duration_h, int((duration_h - t_min)*60))
+        t_max = duration_h
+        t = np.linspace(t_min, t_max, int((t_max - t_min) * 60))
         total, parts = simulate_total(t, st.session_state.sim_doses, start_hour)
-        t_end = compute_t_end(total, t, start_hour)
-        t = np.linspace(t_min, t_end, max(2, int((t_end - t_min)*60)))
-        total, parts = simulate_total(t, st.session_state.sim_doses, start_hour)
+        
+        # Display metrics
+        if len(total) > 0 and np.max(total) > 0:
+            peak_conc = np.max(total)
+            peak_time_idx = np.argmax(total)
+            peak_time = start_hour + t[peak_time_idx]
+            
+            # Find duration above thresholds
+            threshold_20 = 0.2 * peak_conc
+            above_20 = np.where(total > threshold_20)[0]
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Daily", f"{total_daily} mg")
+            with col2:
+                st.metric("Peak Level", f"{peak_conc:.1f}")
+            with col3:
+                st.metric("Peak Time", f"{peak_time:.1f}h")
+            with col4:
+                if len(above_20) > 0:
+                    duration = t[above_20[-1]] - t[above_20[0]]
+                    st.metric("Duration >20%", f"{duration:.1f}h")
+                else:
+                    st.metric("Duration >20%", "0h")
     else:
-        # no doses; default axis
-        t = np.linspace(0, duration_h, int(duration_h*60))
+        t = np.linspace(0, duration_h, int(duration_h * 60))
         total, parts = np.zeros_like(t), []
-        st.info("No doses yet.")
+        st.info("👆 Add doses above to see concentration curves")
     
-    # Display concentration info
-    if st.session_state.sim_doses and len(total) > 0:
-        peak_conc = np.max(total)
-        peak_time_idx = np.argmax(total)
-        peak_time = start_hour + t[peak_time_idx]
-        st.info(f"**Peak concentration**: {peak_conc:.2f} units at {peak_time:.1f}:00")
+    # Create plot
+    fig, ax = plt.subplots(figsize=(chart_width/100, chart_height/100), dpi=100)
     
-    fig = plt.figure(figsize=((chart_width/100.0) if not use_container else 8,
-                                        chart_height/100.0), dpi=100)
-    plt.plot(start_hour+t, total, label="Total concentration", linewidth=2)
-    if st.checkbox("Show IR/ER components", False, key="sim_show"):
-        for lbl, y in parts:
-            plt.plot(start_hour+t, y, "--", label=lbl, alpha=0.7)
-    plt.xlabel("Hour of day"); plt.ylabel("Conc. (arb. units)"); 
-    plt.title("Simulator – " + ("Improved PK Model" if st.session_state.get("model_engine","pk")=="pk" else "Gaussian Model"))
-    plt.grid(True, linestyle="--", alpha=0.3); plt.legend(fontsize=(8 if compact else None))
-    if not st.session_state.get("sim_show", True) and st.session_state.sim_doses:
-        for d in st.session_state.sim_doses:
-            hh, mm = map(int, d["time_str"].split(":"))
-            x = hh + mm/60.0
-            plt.axvline(x, alpha=0.2, linestyle=":", color='gray')
-            if (start_hour + t[0]) <= x <= (start_hour + t[-1]):
-                import numpy as _np
-                y = _np.interp(x - start_hour, t, total)
-                plt.scatter([x], [y], marker="o", s=50, zorder=5)
-    plt.tight_layout(pad=(0.1 if compact else 0.5));
+    # Plot concentration
+    ax.plot(start_hour + t, total, label="Total concentration", linewidth=2.5, color='darkblue')
+    
+    # Show components if requested
+    show_components = st.checkbox("Show IR/ER components", False)
+    if show_components and parts:
+        for label, curve in parts:
+            ax.plot(start_hour + t, curve, '--', label=label, alpha=0.6, linewidth=1.5)
+    
+    # Show therapeutic range
+    show_range = st.checkbox("Show therapeutic range", True)
+    if show_range and len(total) > 0 and np.max(total) > 0:
+        peak = np.max(total)
+        ax.axhspan(0.2 * peak, 0.8 * peak, alpha=0.1, color='green', label='Therapeutic range')
+    
+    # Add dose markers
+    for d in st.session_state.sim_doses:
+        hh, mm = map(int, d["time_str"].split(":"))
+        dose_time = hh + mm/60
+        ax.axvline(dose_time, alpha=0.3, linestyle=':', color='gray')
+        
+        # Add dose point on curve
+        if start_hour + t[0] <= dose_time <= start_hour + t[-1]:
+            y_val = np.interp(dose_time - start_hour, t, total)
+            ax.scatter([dose_time], [y_val], s=80, color='red', zorder=5, marker='v')
+    
+    # Formatting
+    ax.set_xlabel("Time of Day", fontsize=11)
+    ax.set_ylabel("Concentration (arbitrary units)", fontsize=11)
+    model_name = "1-Compartment PK Model" if st.session_state.get("model_engine") == "pk" else "Gaussian Model"
+    ax.set_title(f"Methylphenidate Concentration - {model_name}", fontsize=12, fontweight='bold')
+    ax.grid(True, alpha=0.3, linestyle='--')
+    ax.legend(loc='best', fontsize=9)
+    
+    # Set x-axis to show hours
+    x_ticks = np.arange(max(0, int(start_hour + t[0])), min(24, int(start_hour + t[-1]) + 1), 2)
+    ax.set_xticks(x_ticks)
+    ax.set_xticklabels([f"{int(h):02d}:00" for h in x_ticks])
+    
+    plt.tight_layout()
     st.pyplot(fig, use_container_width=use_container)
 
 # ===== Optimizer =====
-def _objective_score_for_display(doses, start_hour, duration_h, target_start, target_end, lam_out, lam_rough, lam_peak):
-    t_axis = np.linspace(0, duration_h, int(duration_h*60))
-    total, _ = simulate_total(t_axis, doses, start_hour)
-    return objective(total, t_axis, target_start, target_end, lam_out, lam_rough, lam_peak, start_hour)
-
 def objective(total_curve, t_axis, target_start, target_end, lam_out, lam_rough, lam_peak, start_hour):
     hours = start_hour + t_axis
     if target_end >= target_start:
         inside = (hours >= target_start) & (hours <= target_end)
     else:
         inside = (hours >= target_start) | (hours <= target_end)
-    area_in  = safe_trapz(total_curve[inside],  t_axis[inside])
-    area_out = safe_trapz(total_curve[~inside], t_axis[~inside])
-    dcdt = np.gradient(total_curve, t_axis)
-    rough = float(np.trapz(dcdt**2, t_axis))
-    peak = float(np.max(total_curve))
+    area_in = safe_trapz(total_curve[inside], t_axis[inside]) if np.any(inside) else 0
+    area_out = safe_trapz(total_curve[~inside], t_axis[~inside]) if np.any(~inside) else 0
+    dcdt = np.gradient(total_curve, t_axis) if len(total_curve) > 1 else np.zeros_like(total_curve)
+    rough = float(np.trapz(dcdt**2, t_axis)) if len(dcdt) > 1 else 0
+    peak = float(np.max(total_curve)) if len(total_curve) > 0 else 0
     return area_in - lam_out*area_out - lam_rough*rough - lam_peak*peak
 
-def times_in_window_grid(start_hour, duration_h, step_min, target_start, target_end, buffer_h):
-    step_h = step_min/60.0
-    grid = (np.arange(start_hour, start_hour+duration_h+1e-9, step_h) % 24)
-    def in_expanded(h):
-        s, e = target_start%24, target_end%24
-        if e >= s: return (h >= s-buffer_h) and (h <= e+buffer_h)
-        return (h >= s-buffer_h) or (h <= e+buffer_h)
-    cands = [h for h in grid if in_expanded(h)]
-    return [f"{int(h)%24:02d}:{int(round((h%1)*60))%60:02d}" for h in cands]
-
-def fill_to_limit(current, t_axis, start_hour, mg_limit, fed, step_min,
-                  lam_out, lam_rough, lam_peak,
-                  target_start, target_end, buffer_h, min_gap_min):
-    """Greedily add doses AND/OR upgrade 10→20 mg to reach the mg_limit,
-    while respecting MAX_DOSES and min-gap. Uses best absolute objective criteria.
-    """
-    def score(curve):
-        return objective(curve, t_axis, target_start, target_end, lam_out, lam_rough, lam_peak, start_hour)
-
-    # Start state
-    current = [dict(d) for d in current]  # copy
-    total_curve, _ = simulate_total(t_axis, current, start_hour)
-    used_mg = sum(d['mg'] for d in current)
-
-    # Build candidate time grid
-    cand_times = times_in_window_grid(start_hour, int(t_axis[-1]), step_min, target_start, target_end, buffer_h)
-
-    def violates_gap(tstr, picks):
-        def parse(tstr): 
-            hh, mm = map(int, tstr.split(":")); return hh + mm/60.0
-        for d in picks:
-            if abs((parse(tstr) - parse(d['time_str']) + 12) % 24 - 12) < (min_gap_min/60.0):
-                return True
-        return False
-
-    # Phase A: ADD new doses until we hit MAX_DOSES or no time slots fit
-    while used_mg + 10 <= mg_limit and len(current) < MAX_DOSES:
-        best_s = None
-        best_add = None
-        best_curve = None
-        for tstr in cand_times:
-            if violates_gap(tstr, current):
-                continue
-            for dose in (20, 10):  # prefer 20 when filling
-                if used_mg + dose > mg_limit: 
+def optimizer_ui():
+    st.subheader("🎯 Dose Schedule Optimizer")
+    
+    # Target settings
+    st.markdown("### Target Coverage")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        target_start = st.number_input("Start hour", 0, 23, 8)
+        lambda_out = st.slider("Outside penalty", 0.0, 5.0, 1.0, 0.1)
+    with col2:
+        target_end = st.number_input("End hour", 0, 23, 20)
+        lambda_rough = st.slider("Smoothness", 0.0, 1.0, 0.2, 0.05)
+    with col3:
+        daily_limit = st.number_input("Daily limit (mg)", 10, 80, 40, 10)
+        lambda_peak = st.slider("Peak penalty", 0.0, 3.0, 1.0, 0.1)
+    
+    # Constraints
+    st.markdown("### Constraints")
+    col4, col5, col6 = st.columns(3)
+    with col4:
+        step_min = st.selectbox("Time resolution", [15, 30, 60], index=1)
+    with col5:
+        min_gap_min = st.slider("Min gap (min)", 60, 360, 180, 30)
+    with col6:
+        fed = st.checkbox("Take with food", True)
+    
+    # Run optimization
+    if st.button("🔍 Optimize Schedule", type="primary", use_container_width=True):
+        with st.spinner("Finding optimal schedule..."):
+            # Simple greedy optimization
+            best_doses = []
+            best_score = -float('inf')
+            
+            # Try different combinations
+            for n_doses in [1, 2, 3]:
+                if n_doses * 10 > daily_limit:
                     continue
-                trial = current + [{"time_str": tstr, "mg": dose, "fed": fed}]
-                trial_curve, _ = simulate_total(t_axis, trial, start_hour)
-                s = score(trial_curve)
-                if (best_s is None) or (s > best_s + 1e-12):
-                    best_s, best_add, best_curve = s, {"time_str": tstr, "mg": dose, "fed": fed}, trial_curve
-        if best_add is None:
-            break
-        current.append(best_add)
-        used_mg += best_add["mg"]
-        total_curve = best_curve
-
-    # Phase B: if we still have headroom, UPGRADE existing 10mg -> 20mg by best gain
-    while used_mg + 10 <= mg_limit:
-        indices_10 = [i for i,d in enumerate(current) if d["mg"] == 10]
-        if not indices_10:
-            break
-        best_s = None
-        best_idx = None
-        best_curve = None
-        for i in indices_10:
-            trial = [dict(d) for d in current]
-            trial[i]["mg"] = 20
-            trial_curve, _ = simulate_total(t_axis, trial, start_hour)
-            s = score(trial_curve)
-            if (best_s is None) or (s > best_s + 1e-12):
-                best_s, best_idx, best_curve = s, i, trial_curve
-        if best_idx is None:
-            break
-        current[best_idx]["mg"] = 20
-        used_mg += 10
-        total_curve = best_curve
-
-    return current, total_curve
-
-def enforce_morning_first_20(doses, mg_limit):
-    """Ensure the earliest dose (by clock time) is 20mg, adjusting mg values without changing times."""
-    if not doses:
-        return doses
-    # find earliest by clock time
-    def to_minutes(d):
-        hh, mm = map(int, d["time_str"].split(":"))
-        return hh*60 + mm
-    idx_sorted = sorted(range(len(doses)), key=lambda i: to_minutes(doses[i]))
-    first_idx = idx_sorted[0]
-    if doses[first_idx]["mg"] == 20:
-        return doses
-    # look for any other 20mg
-    idx20 = next((i for i in range(len(doses)) if doses[i]["mg"] == 20), None)
-    total_mg = sum(d["mg"] for d in doses)
-    if idx20 is not None:
-        # swap mg
-        doses[first_idx]["mg"], doses[idx20]["mg"] = doses[idx20]["mg"], doses[first_idx]["mg"]
-        return doses
-    # all 10mg
-    if total_mg + 10 <= mg_limit and len(doses) <= MAX_DOSES:
-        doses[first_idx]["mg"] = 20
-        return doses
-    # try to remove the last (by time) 10mg and upgrade earliest
-    if len(doses) >= 2:
-        last_idx = idx_sorted[-1]
-        if doses[last_idx]["mg"] == 10:
-            # remove last, upgrade first
-            doses.pop(last_idx)
-            doses[first_idx]["mg"] = 20
-            return doses
-    return doses
-
-def greedy_optimize(start_hour, duration_h, mg_limit, fed, step_min,
-                    lam_out, lam_rough, lam_peak,
-                    target_start, target_end, buffer_h, min_gap_min,
-                    force_use_all=False):
-    t_axis = np.linspace(0, duration_h, int(duration_h * 60))
-    current = []
-    current_total, _ = simulate_total(t_axis, current, start_hour)
-    used_mg = 0
-    cand_times = times_in_window_grid(start_hour, duration_h, step_min, target_start, target_end, buffer_h)
-
-    def violates_gap(tstr, picks):
-        def parse(tstr): 
-            hh, mm = map(int, tstr.split(":")); return hh + mm/60.0
-        for d in picks:
-            if abs((parse(tstr) - parse(d['time_str']) + 12) % 24 - 12) < (min_gap_min/60.0):
-                return True
-        return False
-
-    def score(curve):
-        return objective(curve, t_axis, target_start, target_end, lam_out, lam_rough, lam_peak, start_hour)
-
-    while True:
-        if len(current) >= MAX_DOSES:
- 
+                    
+                # Generate time candidates
+                time_candidates = []
+                for h in range(max(0, target_start - 2), min(24, target_end + 2)):
+                    for m in range(0, 60, step_min):
+                        time_candidates.append(f"{h:02d}:{m:02d}")
+                
+                # Try combinations
+                if n_doses == 1:
+                    for t1 in time_candidates:
+                        for mg1 in [10, 20, 30, 40]:
+                            if mg1 > daily_limit:
+                                continue
+                            doses = [{"time_str": t1, "mg": mg1, "fed": fed, "type": "IR+ER"}]
+                            t_axis = np.linspace(0, duration_h, int(duration_h * 60))
+                            total, _ = simulate_total(t_axis, doses, start_hour)
+                            score = objective(total, t_axis, target_start, target_end, 
+                                           lambda_out, lambda_rough, lambda_peak, start_hour)
+                            if score > best_score:
+                                best_score = score
+                                best_doses = doses
+                
+                elif n_doses == 2:
+                    # Sample fewer combinations for speed
+                    sample_times = time_candidates[::2]  # Every other time
+                    for i, t1 in enumerate(sample_times[:10]):
+                        for t2 in sample_times[i+4:i+14]:  # Ensure gap
+                            for mg1 in [10, 20]:
+                                for mg2 in [10, 20]:
+                                    if mg1 + mg2 > daily_limit:
+                                        continue
+                                    doses = [
+                                        {"time_str": t1, "mg": mg1, "fed": fed, "type": "IR+ER"},
+                                        {"time_str": t2, "mg": mg2, "fed": fed, "type": "IR+ER"}
+                                    ]
+                                    t_axis = np.linspace(0, duration_h, int(duration_h * 60))
+                                    total, _ = simulate_total(t_axis, doses, start_hour)
+                                    score = objective(total, t_axis, target_start, target_end,
+                                                   lambda_out, lambda_rough, lambda_peak, start_hour)
+                                    if score > best_score:
+                                   
