@@ -71,7 +71,7 @@ PK_CFG_DEFAULT = {
 }
 
 def pk_dose_profile(hours_from_start, dose_entry, t0_hours, fed, cfg=None):
-    \"\"\"Two-input PK model: IR Bateman + lagged ER Bateman with shared ke.\"\"\"
+    """Two-input PK model: IR Bateman + lagged ER Bateman with shared ke."""
     if cfg is None:
         cfg = PK_CFG_DEFAULT
     # Accept dict doses (with 'mg' & optional 'type') or plain number
