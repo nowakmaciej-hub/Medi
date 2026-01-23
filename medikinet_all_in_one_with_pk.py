@@ -2,14 +2,7 @@ import json
 import numpy as np
 import matplotlib.pyplot as plt
 import streamlit as st
-try:
-    from math import gamma as gamma_func
-except Exception:
-    import numpy as _np
-    def gamma_func(x):
-        # Lanczos approximation fallback (never used if math.gamma exists)
-        # Simple approx using Stirling for x>0.5
-        return float(_np.exp(_np.log(_np.sqrt(2*_np.pi)) + (x-0.5)*_np.log(x) - x))
+# Removed unused gamma_func import
 
 # Hard cap on number of doses suggested by optimizer
 MAX_DOSES = 3
@@ -24,13 +17,18 @@ def gaussian_peak(t, t_peak, sigma, amplitude):
     return amplitude * np.exp(-((t - t_peak) ** 2) / (2 * (sigma ** 2)))
 
 def dose_profile(hours_from_start, dose_mg, t0_hours, fed):
+    """Calculate concentration profile for a single dose."""
     # split 50/50 (Medikinet CR formulation)
     if isinstance(dose_mg, dict):
-        mg = dose_mg["mg"]
+        mg = dose_mg.get("mg", 0)
         ir_only = dose_mg.get("type", "IR+ER") == "IR only"
     else:
         mg = dose_mg
         ir_only = False
+
+    # Validate dose
+    if mg <= 0:
+        return np.zeros_like(hours_from_start), np.zeros_like(hours_from_start), np.zeros_like(hours_from_start)
     if ir_only:
         ir_mg = mg
         er_mg = 0.0
@@ -59,22 +57,21 @@ def dose_profile(hours_from_start, dose_mg, t0_hours, fed):
 
 def _bateman(t, t0, ka, ke, amp):
     """One-compartment model with first-order absorption and elimination."""
-    import numpy as _np
     dt = t - t0
-    y = _np.zeros_like(t)
+    y = np.zeros_like(t)
     mask = dt > 0
-    if not _np.any(mask):
+    if not np.any(mask):
         return y
     dtm = dt[mask]
     
     # Handle case where ka ≈ ke (use L'Hôpital's rule approximation)
     if abs(ka - ke) < 0.01:
         # When ka ≈ ke, use the limiting form
-        y_val = amp * ka * dtm * _np.exp(-ke * dtm)
+        y_val = amp * ka * dtm * np.exp(-ke * dtm)
     else:
         denom = ka - ke
         # Standard Bateman equation
-        y_val = amp * (ka / denom) * (_np.exp(-ke * dtm) - _np.exp(-ka * dtm))
+        y_val = amp * (ka / denom) * (np.exp(-ke * dtm) - np.exp(-ka * dtm))
     
     y[mask] = y_val
     return y
@@ -107,7 +104,7 @@ def pk_dose_profile(hours_from_start, dose_entry, t0_hours, fed, cfg=None):
     """Two-input PK model: IR Bateman + lagged ER Bateman with shared ke."""
     if cfg is None:
         cfg = PK_CFG_DEFAULT
-    
+
     # Accept dict doses (with 'mg' & optional 'type') or plain number
     if isinstance(dose_entry, dict):
         mg = dose_entry.get("mg", dose_entry.get("dose", 0))
@@ -115,6 +112,10 @@ def pk_dose_profile(hours_from_start, dose_entry, t0_hours, fed, cfg=None):
     else:
         mg = float(dose_entry)
         is_ir_only = False
+
+    # Validate dose
+    if mg <= 0:
+        return np.zeros_like(hours_from_start), np.zeros_like(hours_from_start), np.zeros_like(hours_from_start)
 
     # Medikinet CR is 50:50 IR:ER
     if is_ir_only:
@@ -154,13 +155,17 @@ def weibull_release(t, scale, shape):
 def two_compartment_model(t, dose_mg, t0, fed, is_ir_only=False, add_variability=False):
     """Two-compartment PK model with Weibull ER release.
     More realistic for methylphenidate distribution and elimination."""
-    
+
     # Convert dose to relative units
     if isinstance(dose_mg, dict):
-        mg = dose_mg["mg"]
+        mg = dose_mg.get("mg", 0)
         is_ir_only = dose_mg.get("type", "IR+ER") == "IR only"
     else:
         mg = float(dose_mg)
+
+    # Validate dose
+    if mg <= 0:
+        return np.zeros_like(t), np.zeros_like(t), np.zeros_like(t)
     
     # Population variability (if enabled)
     if add_variability:
@@ -271,18 +276,32 @@ def two_compartment_model(t, dose_mg, t0, fed, is_ir_only=False, add_variability
     return ir_full, er_full, total_full
 
 def parse_time_to_hours(t_str, start_hour):
-    hh, mm = map(int, t_str.split(":"))
-    rel = (hh + mm/60) - start_hour
-    return rel
+    """Parse time string to hours relative to start_hour."""
+    try:
+        hh, mm = map(int, t_str.split(":"))
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            raise ValueError(f"Invalid time: {t_str}")
+        rel = (hh + mm/60) - start_hour
+        return rel
+    except (ValueError, AttributeError) as e:
+        st.error(f"Error parsing time '{t_str}': {e}")
+        return 0.0
 
 def simulate_total(t_axis, doses, start_hour):
+    """Simulate total concentration from multiple doses."""
+    if len(t_axis) == 0:
+        return np.array([]), []
+
     total = np.zeros_like(t_axis)
     parts = []
-    
+
     # Get model engine and settings
     model = st.session_state.get("model_engine", "pk")
     add_var = st.session_state.get("add_variability", False)
-    
+
+    if not doses:
+        return total, parts
+
     for d in doses:
         t0 = parse_time_to_hours(d["time_str"], start_hour)
         
@@ -308,14 +327,13 @@ def simulate_total(t_axis, doses, start_hour):
 
 def compute_t_end(total_curve, t_axis, start_hour):
     """Return latest t (hours-from-start) to plot."""
-    import numpy as _np
-    if total_curve is None or _np.allclose(total_curve, 0):
+    if total_curve is None or np.allclose(total_curve, 0):
         return 0.0
-    peak = float(_np.max(total_curve))
+    peak = float(np.max(total_curve))
     if peak <= 1e-12:
         return 0.0
     eps = 0.01 * peak
-    idx = _np.where(total_curve > eps)[0]
+    idx = np.where(total_curve > eps)[0]
     if idx.size == 0:
         return 0.0
     last_t = float(t_axis[int(idx[-1])]) + 0.25
@@ -335,8 +353,11 @@ def compute_t_min(doses, start_hour):
     return max(t_min, -12.0)
 
 def safe_trapz(y, x):
-    y = np.asarray(y); x = np.asarray(x)
-    if y.size < 2 or x.size < 2: return 0.0
+    """Safely compute trapezoidal integration."""
+    y = np.asarray(y)
+    x = np.asarray(x)
+    if y.size < 2 or x.size < 2 or y.size != x.size:
+        return 0.0
     return float(np.trapz(y, x))
 
 # ===== Shared controls =====
@@ -542,8 +563,12 @@ def simulator_ui():
     
     # X-axis formatting
     ax = plt.gca()
-    ax.set_xticks(range(int(start_hour + t[0]), int(start_hour + t[-1]) + 1))
-    ax.set_xticklabels([f"{h:02d}:00" for h in range(int(start_hour + t[0]), int(start_hour + t[-1]) + 1)], rotation=45)
+    if len(t) > 0:
+        x_start = int(start_hour + t[0])
+        x_end = int(start_hour + t[-1]) + 1
+        if x_start < x_end:
+            ax.set_xticks(range(x_start, x_end))
+            ax.set_xticklabels([f"{h%24:02d}:00" for h in range(x_start, x_end)], rotation=45)
     
     plt.tight_layout(pad=(0.5 if compact else 1.0))
     st.pyplot(fig, use_container_width=use_container)
@@ -826,45 +851,49 @@ def optimizer_ui():
     
     if st.button("🔍 Optimize Schedule", type="primary"):
         with st.spinner("Optimizing..."):
-            # Run optimization
-            opt_doses, opt_curve, t_axis = greedy_optimize(
-                start_hour, duration_h, int(daily_limit), fed, int(step_min),
-                lambda_out, lambda_rough, lambda_peak,
-                target_start, target_end, cand_buffer_h, int(min_gap_min), 
-                force_use_all=use_all_limit
-            )
-            
-            opt_doses, opt_curve = refine_split_twenty(
-                opt_doses, t_axis, start_hour, int(step_min),
-                lambda_out, lambda_rough, lambda_peak,
-                target_start, target_end, int(min_gap_min)
-            )
-            
-            if sum(d['mg'] for d in opt_doses) > int(daily_limit):
-                opt_doses = trim_to_mg_limit(
-                    opt_doses, t_axis, start_hour, int(daily_limit),
-                    lambda_out, lambda_rough, lambda_peak, target_start, target_end
-                )
-                opt_curve, _ = simulate_total(t_axis, opt_doses, start_hour)
-            
-            if use_all_limit and sum(d['mg'] for d in opt_doses) + 10 <= int(daily_limit):
-                opt_doses, opt_curve = fill_to_limit(
-                    opt_doses, t_axis, start_hour, int(daily_limit), fed, int(step_min),
+            try:
+                # Run optimization
+                opt_doses, opt_curve, t_axis = greedy_optimize(
+                    start_hour, duration_h, int(daily_limit), fed, int(step_min),
                     lambda_out, lambda_rough, lambda_peak,
-                    target_start, target_end, cand_buffer_h, int(min_gap_min)
+                    target_start, target_end, cand_buffer_h, int(min_gap_min),
+                    force_use_all=use_all_limit
                 )
+
+                opt_doses, opt_curve = refine_split_twenty(
+                    opt_doses, t_axis, start_hour, int(step_min),
+                    lambda_out, lambda_rough, lambda_peak,
+                    target_start, target_end, int(min_gap_min)
+                )
+
+                if sum(d['mg'] for d in opt_doses) > int(daily_limit):
+                    opt_doses = trim_to_mg_limit(
+                        opt_doses, t_axis, start_hour, int(daily_limit),
+                        lambda_out, lambda_rough, lambda_peak, target_start, target_end
+                    )
+                    opt_curve, _ = simulate_total(t_axis, opt_doses, start_hour)
+
+                if use_all_limit and sum(d['mg'] for d in opt_doses) + 10 <= int(daily_limit):
+                    opt_doses, opt_curve = fill_to_limit(
+                        opt_doses, t_axis, start_hour, int(daily_limit), fed, int(step_min),
+                        lambda_out, lambda_rough, lambda_peak,
+                        target_start, target_end, cand_buffer_h, int(min_gap_min)
+                    )
+
+                if morning_20:
+                    opt_doses = enforce_morning_first_20(opt_doses, int(daily_limit))
+                    opt_curve, _ = simulate_total(t_axis, opt_doses, start_hour)
             
-            if morning_20:
-                opt_doses = enforce_morning_first_20(opt_doses, int(daily_limit))
-                opt_curve, _ = simulate_total(t_axis, opt_doses, start_hour)
-            
-            import datetime as _dt
-            st.session_state["_opt_last"] = {
-                "doses": opt_doses,
-                "t_axis": t_axis,
-                "ts": _dt.datetime.now().strftime("%H:%M:%S"),
-                "score": float(_objective_score_for_display(opt_doses, start_hour, duration_h, target_start, target_end, lambda_out, lambda_rough, lambda_peak))
-            }
+                import datetime as _dt
+                st.session_state["_opt_last"] = {
+                    "doses": opt_doses,
+                    "t_axis": t_axis,
+                    "ts": _dt.datetime.now().strftime("%H:%M:%S"),
+                    "score": float(_objective_score_for_display(opt_doses, start_hour, duration_h, target_start, target_end, lambda_out, lambda_rough, lambda_peak))
+                }
+            except Exception as e:
+                st.error(f"Optimization failed: {str(e)}")
+                st.info("Try adjusting the constraints or target window.")
     
     # Display results
     last = st.session_state.get("_opt_last", None)
