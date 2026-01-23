@@ -7,10 +7,14 @@ import streamlit as st
 # Hard cap on number of doses suggested by optimizer
 MAX_DOSES = 3
 
+# Version number
+VERSION = "v1.0.0"
+
 # ===== App config =====
 st.set_page_config(page_title="Medikinet CR – Advanced PK Models", layout="wide")
 st.title("Medikinet CR – Advanced Pharmacokinetic Models")
 st.caption("Multiple PK models with increasing complexity. For educational purposes only — not medical advice.")
+st.text(f"Version: {VERSION}")
 
 # ===== Core model =====
 def gaussian_peak(t, t_peak, sigma, amplitude):
