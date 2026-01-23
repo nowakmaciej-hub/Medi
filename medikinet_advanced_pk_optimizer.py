@@ -15,6 +15,11 @@ from scipy.optimize import differential_evolution, minimize
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional
 import matplotlib.patches as mpatches
+import warnings
+
+# Configure numpy to handle numerical errors gracefully
+np.seterr(divide='ignore', invalid='ignore')
+warnings.filterwarnings('ignore', category=RuntimeWarning)
 
 # ===== Configuration =====
 VERSION = "v2.0.0-alpha"
@@ -22,104 +27,67 @@ MAX_DOSES = 4  # Increased from 3 for more flexibility
 
 # ===== Custom Styling =====
 def inject_custom_css():
-    """Inject beautiful custom CSS for modern UI"""
+    """Inject clean custom CSS for modern UI"""
     st.markdown("""
     <style>
-    /* Main background gradient */
+    /* Clean light background */
     .stApp {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
-        background-attachment: fixed;
+        background: #f8f9fa;
     }
 
-    /* Card styling */
-    .css-1r6slb0 {
-        background: rgba(255, 255, 255, 0.95);
-        border-radius: 15px;
-        padding: 20px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-        backdrop-filter: blur(10px);
-    }
-
-    /* Sidebar styling */
-    .css-1d391kg {
-        background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
-        color: white;
-    }
-
-    /* Headers */
+    /* Headers - dark and readable */
     h1, h2, h3 {
-        color: #2d3748;
+        color: #1a202c;
         font-weight: 700;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
     }
 
-    /* Metrics */
-    .stMetric {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 15px;
-        border-radius: 10px;
-        color: white;
-        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-    }
-
-    .stMetric label {
-        color: rgba(255, 255, 255, 0.9) !important;
-    }
-
-    .stMetric .metric-value {
-        color: white !important;
-        font-weight: bold;
-    }
-
-    /* Buttons */
+    /* Buttons - simple blue style */
     .stButton>button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: #4c6ef5;
         color: white;
         border: none;
-        border-radius: 10px;
-        padding: 12px 30px;
+        border-radius: 8px;
+        padding: 10px 24px;
         font-weight: 600;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        transition: all 0.2s ease;
     }
 
     .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        background: #3b5bdb;
+        transform: translateY(-1px);
     }
 
-    /* Sliders */
-    .stSlider > div > div > div {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-    }
-
-    /* Info boxes */
-    .stAlert {
-        border-radius: 10px;
-        border-left: 5px solid #667eea;
+    /* Primary button */
+    .stButton>button[kind="primary"] {
+        background: #4c6ef5;
     }
 
     /* Expanders */
     .streamlit-expanderHeader {
-        background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-        border-radius: 10px;
+        background: rgba(76, 110, 245, 0.08);
+        border-radius: 8px;
         font-weight: 600;
     }
 
-    /* Success boxes */
-    .element-container .stSuccess {
-        background: linear-gradient(135deg, #56ab2f 0%, #a8e063 100%);
-        color: white;
-        border-radius: 10px;
-        padding: 15px;
+    /* Metrics - clean cards */
+    [data-testid="stMetricValue"] {
+        font-size: 1.8rem;
+        color: #1a202c;
     }
 
-    /* Warning boxes */
-    .element-container .stWarning {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        color: white;
-        border-radius: 10px;
-        padding: 15px;
+    [data-testid="stMetricLabel"] {
+        color: #4a5568;
+        font-weight: 600;
+    }
+
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background: #ffffff;
+    }
+
+    /* Info/Success/Warning boxes - high contrast */
+    .stAlert {
+        border-radius: 8px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -301,16 +269,31 @@ def prodrug_model(t: np.ndarray, t0: float, ka: float, k_conv: float, ke: float,
     beta = k_conv
     gamma = ke
 
-    # Simplified analytical solution for linear cascade
-    C1 = ka * k_conv / ((ka - k_conv) * (ka - ke))
-    C2 = ka * k_conv / ((k_conv - ka) * (k_conv - ke))
-    C3 = ka * k_conv / ((ke - ka) * (ke - k_conv))
+    # Check for near-equal rate constants to avoid division by zero
+    eps = 0.01
 
-    active[mask] = (f * dose / vd) * (
-        C1 * np.exp(-ke * dtm) +
-        C2 * np.exp(-k_conv * dtm) +
-        C3 * np.exp(-ka * dtm)
-    )
+    # Simplified analytical solution for linear cascade
+    try:
+        # Check all denominators
+        if abs(ka - k_conv) < eps or abs(ka - ke) < eps or abs(k_conv - ke) < eps:
+            # Fall back to numerical approximation for equal rates
+            # Use average rate for smooth curve
+            k_avg = (ka + k_conv + ke) / 3.0
+            active[mask] = (f * dose / vd) * k_avg * dtm * np.exp(-k_avg * dtm)
+        else:
+            C1 = ka * k_conv / ((ka - k_conv) * (ka - ke))
+            C2 = ka * k_conv / ((k_conv - ka) * (k_conv - ke))
+            C3 = ka * k_conv / ((ke - ka) * (ke - k_conv))
+
+            active[mask] = (f * dose / vd) * (
+                C1 * np.exp(-ke * dtm) +
+                C2 * np.exp(-k_conv * dtm) +
+                C3 * np.exp(-ka * dtm)
+            )
+    except (ZeroDivisionError, FloatingPointError):
+        # Fallback for any numerical issues
+        k_avg = (ka + k_conv + ke) / 3.0
+        active[mask] = (f * dose / vd) * k_avg * dtm * np.exp(-k_avg * dtm)
 
     return prodrug, active
 
@@ -322,19 +305,23 @@ def simulate_dose_profile(t: np.ndarray, dose_mg: float, t0: float,
 
     Returns: (ir_component, er_component, total_concentration)
     """
+    # Validate inputs
+    if len(t) == 0 or dose_mg <= 0:
+        return np.zeros_like(t), np.zeros_like(t), np.zeros_like(t)
+
     # Apply metabolism rate to elimination
-    ke_adjusted = drug_params.ke * person_params.metabolism_rate
+    ke_adjusted = max(drug_params.ke * person_params.metabolism_rate, 0.01)  # Ensure positive
 
     # Apply sleep quality to bioavailability (better sleep = better absorption)
-    f_ir = drug_params.f_ir * person_params.sleep_quality
-    f_er = drug_params.f_er * person_params.sleep_quality
+    f_ir = np.clip(drug_params.f_ir * person_params.sleep_quality, 0, 1.5)
+    f_er = np.clip(drug_params.f_er * person_params.sleep_quality, 0, 1.5)
 
     # Calculate dose split
     ir_dose = dose_mg * drug_params.ir_fraction
     er_dose = dose_mg * (1 - drug_params.ir_fraction)
 
     # Volume of distribution adjusted for body weight
-    vd_total = drug_params.vd * person_params.body_weight
+    vd_total = max(drug_params.vd * person_params.body_weight, 1.0)  # Ensure positive
 
     ir_component = np.zeros_like(t)
     er_component = np.zeros_like(t)
@@ -441,33 +428,40 @@ def parse_time_to_hours(t_str: str, start_hour: float) -> float:
 
 def compute_metrics(total_curve: np.ndarray, t_axis: np.ndarray, start_hour: float) -> Dict:
     """Compute pharmacokinetic metrics"""
-    if len(total_curve) == 0 or np.max(total_curve) < 1e-9:
+    if len(total_curve) == 0 or len(t_axis) == 0:
         return {}
 
-    peak_conc = np.max(total_curve)
-    peak_idx = np.argmax(total_curve)
-    peak_time = start_hour + t_axis[peak_idx]
+    if np.max(total_curve) < 1e-9 or np.isnan(total_curve).any() or np.isinf(total_curve).any():
+        return {}
 
-    # AUC (area under curve)
-    auc = float(np.trapz(total_curve, t_axis))
+    try:
+        peak_conc = float(np.max(total_curve))
+        peak_idx = int(np.argmax(total_curve))
+        peak_time = float(start_hour + t_axis[peak_idx])
 
-    # Time above thresholds
-    threshold_20 = 0.2 * peak_conc
-    threshold_50 = 0.5 * peak_conc
+        # AUC (area under curve)
+        auc = float(np.trapz(total_curve, t_axis))
 
-    above_20 = np.where(total_curve > threshold_20)[0]
-    above_50 = np.where(total_curve > threshold_50)[0]
+        # Time above thresholds
+        threshold_20 = 0.2 * peak_conc
+        threshold_50 = 0.5 * peak_conc
 
-    duration_20 = (t_axis[above_20[-1]] - t_axis[above_20[0]]) if len(above_20) > 0 else 0.0
-    duration_50 = (t_axis[above_50[-1]] - t_axis[above_50[0]]) if len(above_50) > 0 else 0.0
+        above_20 = np.where(total_curve > threshold_20)[0]
+        above_50 = np.where(total_curve > threshold_50)[0]
 
-    return {
-        "peak_conc": peak_conc,
-        "peak_time": peak_time,
-        "auc": auc,
-        "duration_20": duration_20,
-        "duration_50": duration_50
-    }
+        duration_20 = float(t_axis[above_20[-1]] - t_axis[above_20[0]]) if len(above_20) > 1 else 0.0
+        duration_50 = float(t_axis[above_50[-1]] - t_axis[above_50[0]]) if len(above_50) > 1 else 0.0
+
+        return {
+            "peak_conc": peak_conc,
+            "peak_time": peak_time,
+            "auc": auc,
+            "duration_20": duration_20,
+            "duration_50": duration_50
+        }
+    except (ValueError, IndexError, TypeError) as e:
+        st.warning(f"Error computing metrics: {str(e)}")
+        return {}
 
 # ===== Improved Optimizer =====
 def objective_function(params: np.ndarray, t_axis: np.ndarray, start_hour: float,
@@ -518,6 +512,10 @@ def objective_function(params: np.ndarray, t_axis: np.ndarray, start_hour: float
         t_axis, doses, start_hour, drug_name, person_params
     )
 
+    # Check if simulation produced valid results
+    if len(total_curve) == 0 or np.all(total_curve == 0):
+        return 1e9
+
     # Compute objective components
     hours_of_day = start_hour + t_axis
 
@@ -528,15 +526,22 @@ def objective_function(params: np.ndarray, t_axis: np.ndarray, start_hour: float
         in_window = (hours_of_day >= target_start) | (hours_of_day <= target_end)
 
     # Coverage in and out of window
-    coverage_in = np.trapz(total_curve[in_window], t_axis[in_window]) if np.any(in_window) else 0
-    coverage_out = np.trapz(total_curve[~in_window], t_axis[~in_window]) if np.any(~in_window) else 0
+    try:
+        coverage_in = np.trapz(total_curve[in_window], t_axis[in_window]) if np.any(in_window) and len(total_curve[in_window]) > 1 else 0
+        coverage_out = np.trapz(total_curve[~in_window], t_axis[~in_window]) if np.any(~in_window) and len(total_curve[~in_window]) > 1 else 0
+    except (ValueError, IndexError):
+        coverage_in = 0
+        coverage_out = 0
 
     # Smoothness (penalize rapid changes)
-    gradient = np.gradient(total_curve, t_axis)
-    roughness = np.trapz(gradient**2, t_axis)
+    try:
+        gradient = np.gradient(total_curve, t_axis)
+        roughness = np.trapz(gradient**2, t_axis)
+    except (ValueError, IndexError):
+        roughness = 0
 
     # Peak concentration
-    peak = np.max(total_curve)
+    peak = np.max(total_curve) if len(total_curve) > 0 else 0
 
     # Objective: maximize coverage in window, minimize out-of-window, smoothness, and peak
     score = coverage_in - lambda_out * coverage_out - lambda_smooth * roughness - lambda_peak * peak
@@ -623,12 +628,12 @@ inject_custom_css()
 
 # ===== Header =====
 st.markdown(f"""
-<div style='text-align: center; padding: 20px; background: rgba(255,255,255,0.9); border-radius: 15px; margin-bottom: 20px;'>
-    <h1 style='margin:0; color: #667eea;'>💊 Advanced Pharmacokinetic Optimizer</h1>
-    <p style='margin: 10px 0 0 0; color: #764ba2; font-size: 1.2em;'>
+<div style='text-align: center; padding: 25px; background: white; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);'>
+    <h1 style='margin:0; color: #1a202c;'>💊 Advanced Pharmacokinetic Optimizer</h1>
+    <p style='margin: 10px 0 0 0; color: #4c6ef5; font-size: 1.2em; font-weight: 600;'>
         Methylphenidate & Lisdexamfetamine Modeling Tool
     </p>
-    <p style='margin: 5px 0 0 0; color: #666; font-size: 0.9em;'>
+    <p style='margin: 8px 0 0 0; color: #6c757d; font-size: 0.9em;'>
         Version {VERSION} | For educational purposes only - NOT medical advice
     </p>
 </div>
@@ -938,9 +943,9 @@ else:  # Optimizer mode
     st.markdown("## 🚀 Advanced Schedule Optimizer")
 
     st.markdown("""
-    <div style='background: linear-gradient(135deg, rgba(102,126,234,0.1) 0%, rgba(118,75,162,0.1) 100%);
-                padding: 15px; border-radius: 10px; margin-bottom: 20px;'>
-        <p style='margin:0; color: #2d3748;'>
+    <div style='background: #e7f5ff; border-left: 4px solid #4c6ef5;
+                padding: 16px; border-radius: 8px; margin-bottom: 20px;'>
+        <p style='margin:0; color: #1a202c; line-height: 1.6;'>
             <strong>This optimizer uses differential evolution</strong> - a powerful global optimization algorithm
             that explores the solution space intelligently to find the best dose schedule for your needs.
         </p>
