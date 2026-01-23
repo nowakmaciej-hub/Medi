@@ -21,6 +21,12 @@ import warnings
 np.seterr(divide='ignore', invalid='ignore')
 warnings.filterwarnings('ignore', category=RuntimeWarning)
 
+# NumPy 2.0+ compatibility - trapz was renamed to trapezoid
+try:
+    from numpy import trapezoid as trapz
+except ImportError:
+    from numpy import trapz
+
 # ===== Configuration =====
 VERSION = "v2.0.0-alpha"
 MAX_DOSES = 4  # Increased from 3 for more flexibility
@@ -440,7 +446,7 @@ def compute_metrics(total_curve: np.ndarray, t_axis: np.ndarray, start_hour: flo
         peak_time = float(start_hour + t_axis[peak_idx])
 
         # AUC (area under curve)
-        auc = float(np.trapz(total_curve, t_axis))
+        auc = float(trapz(total_curve, t_axis))
 
         # Time above thresholds
         threshold_20 = 0.2 * peak_conc
@@ -527,8 +533,8 @@ def objective_function(params: np.ndarray, t_axis: np.ndarray, start_hour: float
 
     # Coverage in and out of window
     try:
-        coverage_in = np.trapz(total_curve[in_window], t_axis[in_window]) if np.any(in_window) and len(total_curve[in_window]) > 1 else 0
-        coverage_out = np.trapz(total_curve[~in_window], t_axis[~in_window]) if np.any(~in_window) and len(total_curve[~in_window]) > 1 else 0
+        coverage_in = trapz(total_curve[in_window], t_axis[in_window]) if np.any(in_window) and len(total_curve[in_window]) > 1 else 0
+        coverage_out = trapz(total_curve[~in_window], t_axis[~in_window]) if np.any(~in_window) and len(total_curve[~in_window]) > 1 else 0
     except (ValueError, IndexError):
         coverage_in = 0
         coverage_out = 0
@@ -536,7 +542,7 @@ def objective_function(params: np.ndarray, t_axis: np.ndarray, start_hour: float
     # Smoothness (penalize rapid changes)
     try:
         gradient = np.gradient(total_curve, t_axis)
-        roughness = np.trapz(gradient**2, t_axis)
+        roughness = trapz(gradient**2, t_axis)
     except (ValueError, IndexError):
         roughness = 0
 
