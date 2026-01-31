@@ -640,7 +640,7 @@ st.markdown(f"""
     <p style='margin: 10px 0 0 0; color: #4c6ef5; font-size: 1.2em; font-weight: 600;'>
         Methylphenidate & Lisdexamfetamine Modeling Tool
     </p>
-    <p style='margin: 8px 0 0 0; color: #6c757d; font-size: 0.9em;'>
+    <p style='margin: 8px 0 0 0; color: #4a5568; font-size: 0.9em;'>
         Version {VERSION} | For educational purposes only - NOT medical advice
     </p>
 </div>
@@ -1147,13 +1147,13 @@ else:  # Optimizer mode
 # ===== Footer =====
 st.markdown("---")
 st.markdown("""
-<div style='text-align: center; color: #666; font-size: 0.9em; padding: 20px;'>
-    <p><strong>⚠️ Important Medical Disclaimer:</strong></p>
+<div style='text-align: center; color: #1a202c; font-size: 0.9em; padding: 20px; background: #fff; border-radius: 8px;'>
+    <p><strong style='color: #c53030;'>⚠️ Important Medical Disclaimer:</strong></p>
     <p>This tool is for <strong>educational and research purposes only</strong>. It uses simplified mathematical models
     that do not account for individual genetic variations, drug interactions, comorbidities, or other clinical factors.</p>
     <p><strong>Do NOT use this for medical decisions.</strong> Always consult with a qualified healthcare provider
     for medication management. PK parameters are approximations from literature and may not reflect your individual response.</p>
-    <p style='margin-top: 10px; font-size: 0.8em;'>
+    <p style='margin-top: 10px; font-size: 0.8em; color: #4a5568;'>
         Built with Streamlit | Version {version}
     </p>
 </div>
