@@ -24,16 +24,10 @@ pip install -r requirements.txt
 
 ## Usage
 
-Run the new advanced optimizer:
+Run the application:
 
 ```bash
 streamlit run medikinet_advanced_pk_optimizer.py
-```
-
-Or run the original version:
-
-```bash
-streamlit run medikinet_all_in_one_with_pk.py
 ```
 
 The app will open in your browser at `http://localhost:8501`
@@ -65,11 +59,11 @@ The advanced optimizer uses **differential evolution** - a powerful global optim
 - Slower onset, smoother profile
 
 ### Personal Factors
-- **Body Weight**: Affects volume of distribution
-- **Sleep Quality**: Modifies bioavailability (0.5-1.5x)
-- **Metabolism Rate**: Adjusts elimination rate (0.5-1.5x)
-- **Effectiveness**: Individual response sensitivity (0.5-1.5x)
-- **Tolerance**: Progressive reduction in effect over the day
+- **Body Weight**: Affects volume of distribution (clinically established)
+- **Sleep Quality**: Hypothetical modifier for subjective response (0.5-1.5x) - relationship not clinically established
+- **Metabolism Rate**: Adjusts elimination rate (0.5-1.5x) - proxy for CYP enzyme activity
+- **Effectiveness**: Individual response sensitivity (0.5-1.5x) - accounts for receptor sensitivity
+- **Tolerance**: Progressive reduction in effect over the day - simplified acute tolerance model
 
 ## 📊 Metrics Calculated
 
@@ -92,6 +86,19 @@ The advanced optimizer uses **differential evolution** - a powerful global optim
 **For educational and research purposes only - NOT medical advice**
 
 This tool simulates pharmacokinetic profiles based on mathematical models and literature values. It should NEVER be used for medical decision-making. Always consult with a qualified healthcare provider for medication management.
+
+## 🔬 Model Limitations
+
+This tool uses simplified pharmacokinetic models. Users should be aware of the following limitations:
+
+- **One-compartment model**: Does not capture tissue distribution dynamics
+- **Population averages**: PK parameters are derived from literature averages, not individual measurements
+- **No genetic factors**: Does not account for CYP2D6 polymorphisms or other pharmacogenomic variations
+- **No drug interactions**: Does not model concurrent medications that may affect PK
+- **Simplified tolerance**: Acute tolerance model is a basic exponential decay approximation
+- **No food composition effects**: Only models fed/fasted states, not specific meal effects
+- **Concentration values are relative**: Displayed values are model-derived and not absolute clinical measurements
+- **Therapeutic range is illustrative**: The 20-80% range shown is not a clinically validated threshold
 
 ## 📝 Version History
 
