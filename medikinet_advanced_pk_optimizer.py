@@ -318,9 +318,10 @@ def simulate_dose_profile(t: np.ndarray, dose_mg: float, t0: float,
     # Apply metabolism rate to elimination
     ke_adjusted = max(drug_params.ke * person_params.metabolism_rate, 0.01)  # Ensure positive
 
-    # Apply sleep quality to bioavailability (better sleep = better absorption)
-    f_ir = np.clip(drug_params.f_ir * person_params.sleep_quality, 0, 1.5)
-    f_er = np.clip(drug_params.f_er * person_params.sleep_quality, 0, 1.5)
+    # Apply sleep quality as a modifier to effective bioavailability
+    # Note: This is a simplified model; actual relationship is not well-established
+    f_ir = np.clip(drug_params.f_ir * person_params.sleep_quality, 0.1, 1.0)
+    f_er = np.clip(drug_params.f_er * person_params.sleep_quality, 0.1, 1.0)
 
     # Calculate dose split
     ir_dose = dose_mg * drug_params.ir_fraction
@@ -672,27 +673,32 @@ with st.sidebar:
         if drug_name == "Methylphenidate CR":
             st.markdown("""
             **Methylphenidate CR (Medikinet)**
-            - 50:50 IR:ER formulation
-            - Half-life: ~2 hours
-            - Duration: 6-8 hours
-            - Peak: 1.5-3 hours
+            - 50:50 IR:ER biphasic release formulation
+            - Half-life: ~2-3 hours (methylphenidate)
+            - Duration: 6-8 hours clinical effect
+            - Tmax: 1.5-3 hours (biphasic peaks)
+            - Take with food for optimal ER release
+            - CYP2D6 substrate (minor pathway)
             """)
         elif drug_name == "Lisdexamfetamine":
             st.markdown("""
             **Lisdexamfetamine (Vyvanse)**
-            - Prodrug → dexamfetamine
-            - Half-life: ~10 hours (active)
-            - Duration: 10-14 hours
-            - Smoother profile, less abuse potential
-            - Conversion time: ~1 hour
+            - Prodrug → dexamfetamine (d-amphetamine)
+            - Half-life: ~10-12 hours (active metabolite)
+            - Duration: 10-14 hours effective coverage
+            - Smoother plasma profile due to prodrug conversion
+            - Reduced abuse potential in intact form (cannot be injected/snorted effectively)
+            - Tmax: 1-4 hours after dosing
             """)
         else:
             st.markdown("""
-            **Dexamfetamine IR**
-            - Immediate release
-            - Half-life: ~10 hours
-            - Duration: 4-6 hours peak effect
+            **Dexamfetamine IR (d-Amphetamine)**
+            - Immediate release formulation
+            - Half-life: 10-12 hours (pH-dependent)
+            - Duration: 4-6 hours peak clinical effect
+            - Tmax: 1-3 hours
             - Faster onset than lisdexamfetamine
+            - Urinary pH affects elimination rate
             """)
 
     st.markdown("---")
@@ -709,7 +715,7 @@ with st.sidebar:
     sleep_quality = st.slider(
         "Sleep Quality Factor",
         0.5, 1.5, 1.0, 0.1,
-        help="Poor sleep (0.5) reduces bioavailability, good sleep (1.5) improves it"
+        help="Hypothetical modifier for subjective response. Note: Direct PK relationship not clinically established."
     )
 
     metabolism_rate = st.slider(
@@ -752,7 +758,7 @@ with st.sidebar:
     st.markdown("### 📊 Chart Settings")
     chart_height = st.slider("Chart Height (px)", 200, 800, 400, 50)
     show_components = st.checkbox("Show IR/ER Components", False)
-    show_therapeutic = st.checkbox("Show Therapeutic Range", True)
+    show_therapeutic = st.checkbox("Show Effective Range", True, help="Illustrative range (20-80% of peak). Not clinically validated thresholds.")
 
 # ===== Main App =====
 if "🎮 Simulator" in mode:
@@ -864,7 +870,8 @@ if "🎮 Simulator" in mode:
             with col1:
                 st.metric(
                     "Peak Concentration",
-                    f"{metrics['peak_conc']:.2f} ng/mL"
+                    f"{metrics['peak_conc']:.2f}",
+                    help="Relative units (model-derived, not absolute clinical values)"
                 )
             with col2:
                 peak_h = int(metrics['peak_time'])
@@ -897,10 +904,10 @@ if "🎮 Simulator" in mode:
             for (label, curve), color in zip(components, colors):
                 ax.plot(hours_of_day, curve, '--', linewidth=2, alpha=0.7, label=label, color=color)
 
-        # Therapeutic range
+        # Illustrative therapeutic range (not clinically validated)
         if show_therapeutic and len(total_curve) > 0 and np.max(total_curve) > 0:
             peak = np.max(total_curve)
-            ax.axhspan(0.2*peak, 0.8*peak, alpha=0.15, color='green', label='Therapeutic Range (20-80%)')
+            ax.axhspan(0.2*peak, 0.8*peak, alpha=0.15, color='green', label='Approx. Effective Range (20-80% peak)')
 
         # Dose markers
         for d in st.session_state.sim_doses:
@@ -913,7 +920,7 @@ if "🎮 Simulator" in mode:
                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
         ax.set_xlabel('Hour of Day', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Plasma Concentration (ng/mL)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Relative Plasma Concentration', fontsize=12, fontweight='bold')
         ax.set_title(f'{drug_name} - Concentration Profile', fontsize=14, fontweight='bold', pad=20)
         ax.grid(True, alpha=0.3, linestyle='--')
         ax.legend(loc='best', fontsize=9, framealpha=0.9)
@@ -1049,7 +1056,7 @@ else:  # Optimizer mode
             col1, col2, col3, col4 = st.columns(4)
 
             with col1:
-                st.metric("Peak Conc.", f"{metrics['peak_conc']:.2f} ng/mL")
+                st.metric("Peak Conc.", f"{metrics['peak_conc']:.2f}", help="Relative units")
             with col2:
                 peak_h = int(metrics['peak_time'])
                 peak_m = int((metrics['peak_time'] % 1) * 60)
@@ -1081,10 +1088,10 @@ else:  # Optimizer mode
             for (label, curve), color in zip(components, colors):
                 ax.plot(hours_of_day, curve, '--', linewidth=2, alpha=0.7, label=label, color=color)
 
-        # Therapeutic range
+        # Illustrative therapeutic range (not clinically validated)
         if show_therapeutic and len(total_curve) > 0 and np.max(total_curve) > 0:
             peak = np.max(total_curve)
-            ax.axhspan(0.2*peak, 0.8*peak, alpha=0.15, color='blue', label='Therapeutic Range')
+            ax.axhspan(0.2*peak, 0.8*peak, alpha=0.15, color='blue', label='Approx. Effective Range')
 
         # Dose markers
         for d in opt_doses:
@@ -1097,7 +1104,7 @@ else:  # Optimizer mode
                        bbox=dict(boxstyle='round,pad=0.5', facecolor='yellow', alpha=0.8, edgecolor='red'))
 
         ax.set_xlabel('Hour of Day', fontsize=13, fontweight='bold')
-        ax.set_ylabel('Plasma Concentration (ng/mL)', fontsize=13, fontweight='bold')
+        ax.set_ylabel('Relative Plasma Concentration', fontsize=13, fontweight='bold')
         ax.set_title(f'Optimized {drug_name} Schedule', fontsize=15, fontweight='bold', pad=20)
         ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.7)
         ax.legend(loc='best', fontsize=10, framealpha=0.95, shadow=True)
@@ -1141,10 +1148,13 @@ else:  # Optimizer mode
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; font-size: 0.9em; padding: 20px;'>
-    <p><strong>⚠️ Disclaimer:</strong> This tool is for educational and research purposes only.</p>
-    <p>Do NOT use this for medical decisions. Always consult with a qualified healthcare provider.</p>
+    <p><strong>⚠️ Important Medical Disclaimer:</strong></p>
+    <p>This tool is for <strong>educational and research purposes only</strong>. It uses simplified mathematical models
+    that do not account for individual genetic variations, drug interactions, comorbidities, or other clinical factors.</p>
+    <p><strong>Do NOT use this for medical decisions.</strong> Always consult with a qualified healthcare provider
+    for medication management. PK parameters are approximations from literature and may not reflect your individual response.</p>
     <p style='margin-top: 10px; font-size: 0.8em;'>
-        Built with ❤️ using Streamlit | Version {VERSION}
+        Built with Streamlit | Version {version}
     </p>
 </div>
-""".format(VERSION=VERSION), unsafe_allow_html=True)
+""".format(version=VERSION), unsafe_allow_html=True)
